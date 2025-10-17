@@ -1,15 +1,19 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
-
+from bs4 import BeautifulSoup
+import requests
+from urllib.parse import urljoin, urlparse
+import json
+import asyncio
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -19,158 +23,404 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
-
-# Create a router with the /api prefix
+app = FastAPI(title="CRAWLai API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
 
+# Models
+class ScrapeRequest(BaseModel):
+    url: str
+    selectors: Optional[List[Dict[str, str]]] = []
+    extract_links: bool = True
+    extract_images: bool = True
+    extract_tables: bool = True
+    max_depth: int = 1
+    follow_pagination: bool = False
 
-# Define Models
-class ScrapedData(BaseModel):
+class ScraperProject(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    url: str
-    title: str
-    domain: str
-    scraped_content: Dict[str, Any]
-    keywords_found: List[str] = []
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    user_agent: Optional[str] = None
+    name: str
+    description: Optional[str] = ""
+    target_url: str
+    selectors: List[Dict[str, Any]] = []
+    schedule: Optional[str] = None
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_run: Optional[datetime] = None
+    run_count: int = 0
 
-class ScrapedDataCreate(BaseModel):
-    url: str
-    title: str
-    domain: str
-    scraped_content: Dict[str, Any]
-    keywords_found: List[str] = []
-    user_agent: Optional[str] = None
+class ScraperProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    target_url: str
+    selectors: List[Dict[str, Any]] = []
+    schedule: Optional[str] = None
 
-class ScraperConfig(BaseModel):
+class ScrapedResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    auto_scrape_enabled: bool = True
-    keywords: List[str] = []
-    selectors: List[Dict[str, str]] = []
-    whitelist_domains: List[str] = []
-    blacklist_domains: List[str] = []
-    export_format: str = "json"
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    url: str
+    title: Optional[str] = ""
+    data: Dict[str, Any] = {}
+    scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    status: str = "success"
+    error: Optional[str] = None
 
-class ScraperConfigCreate(BaseModel):
-    auto_scrape_enabled: bool = True
-    keywords: List[str] = []
-    selectors: List[Dict[str, str]] = []
-    whitelist_domains: List[str] = []
-    blacklist_domains: List[str] = []
-    export_format: str = "json"
+class ScrapeTemplate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    category: str
+    description: str
+    icon: str
+    selectors: List[Dict[str, Any]]
+    sample_url: str
 
+# Scraping Engine
+class WebScraper:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+    
+    def scrape_url(self, url: str, selectors: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            result = {
+                'url': url,
+                'title': soup.title.string if soup.title else '',
+                'data': {}
+            }
+            
+            # Extract based on selectors
+            if selectors:
+                for selector_config in selectors:
+                    name = selector_config.get('name', 'unnamed')
+                    selector = selector_config.get('selector', '')
+                    extract_type = selector_config.get('type', 'text')
+                    
+                    elements = soup.select(selector)
+                    
+                    if extract_type == 'text':
+                        result['data'][name] = [el.get_text(strip=True) for el in elements]
+                    elif extract_type == 'attribute':
+                        attr = selector_config.get('attribute', 'href')
+                        result['data'][name] = [el.get(attr) for el in elements if el.get(attr)]
+                    elif extract_type == 'html':
+                        result['data'][name] = [str(el) for el in elements]
+            
+            # Auto-extract common elements
+            result['data']['links'] = [
+                {'text': a.get_text(strip=True), 'href': urljoin(url, a.get('href'))}
+                for a in soup.find_all('a', href=True)
+            ][:50]  # Limit to 50 links
+            
+            result['data']['images'] = [
+                {'src': urljoin(url, img.get('src')), 'alt': img.get('alt', '')}
+                for img in soup.find_all('img', src=True)
+            ][:30]  # Limit to 30 images
+            
+            # Extract tables
+            tables = []
+            for table in soup.find_all('table')[:5]:  # Limit to 5 tables
+                rows = []
+                for tr in table.find_all('tr'):
+                    cells = [td.get_text(strip=True) for td in tr.find_all(['td', 'th'])]
+                    if cells:
+                        rows.append(cells)
+                if rows:
+                    tables.append(rows)
+            result['data']['tables'] = tables
+            
+            # Extract meta tags
+            result['data']['meta'] = {
+                meta.get('name') or meta.get('property'): meta.get('content')
+                for meta in soup.find_all('meta')
+                if meta.get('content')
+            }
+            
+            return result
+            
+        except Exception as e:
+            return {
+                'url': url,
+                'error': str(e),
+                'status': 'failed'
+            }
 
-# Routes
+scraper = WebScraper()
+
+# API Routes
 @api_router.get("/")
 async def root():
-    return {"message": "Web Scraper API", "status": "active"}
+    return {"message": "CRAWLai API", "version": "1.0.0", "status": "active"}
 
-# Scraped Data Endpoints
-@api_router.post("/scrape/data", response_model=ScrapedData)
-async def save_scraped_data(input: ScrapedDataCreate):
-    """Save scraped data from browser extension"""
-    data_obj = ScrapedData(**input.model_dump())
-    
-    doc = data_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    await db.scraped_data.insert_one(doc)
-    return data_obj
+# Quick Scrape
+@api_router.post("/scrape/quick")
+async def quick_scrape(request: ScrapeRequest):
+    """Perform a quick scrape of a URL"""
+    result = scraper.scrape_url(request.url, request.selectors)
+    return result
 
-@api_router.get("/scrape/data", response_model=List[ScrapedData])
-async def get_scraped_data(
-    limit: int = 100,
-    domain: Optional[str] = None,
-    keyword: Optional[str] = None
-):
-    """Retrieve scraped data with optional filters"""
-    query = {}
+# Projects CRUD
+@api_router.post("/projects", response_model=ScraperProject)
+async def create_project(project: ScraperProjectCreate):
+    """Create a new scraping project"""
+    project_obj = ScraperProject(**project.model_dump())
+    doc = project_obj.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    if doc.get('last_run'):
+        doc['last_run'] = doc['last_run'].isoformat()
     
-    if domain:
-        query['domain'] = domain
-    
-    if keyword:
-        query['keywords_found'] = keyword
-    
-    data = await db.scraped_data.find(query, {"_id": 0}).sort("timestamp", -1).limit(limit).to_list(limit)
-    
-    for item in data:
-        if isinstance(item['timestamp'], str):
-            item['timestamp'] = datetime.fromisoformat(item['timestamp'])
-    
-    return data
+    await db.scraper_projects.insert_one(doc)
+    return project_obj
 
-@api_router.delete("/scrape/data/{data_id}")
-async def delete_scraped_data(data_id: str):
-    """Delete a specific scraped data entry"""
-    result = await db.scraped_data.delete_one({"id": data_id})
+@api_router.get("/projects", response_model=List[ScraperProject])
+async def get_projects():
+    """Get all scraping projects"""
+    projects = await db.scraper_projects.find({}, {"_id": 0}).to_list(1000)
+    
+    for project in projects:
+        if isinstance(project.get('created_at'), str):
+            project['created_at'] = datetime.fromisoformat(project['created_at'])
+        if project.get('last_run') and isinstance(project['last_run'], str):
+            project['last_run'] = datetime.fromisoformat(project['last_run'])
+    
+    return projects
+
+@api_router.get("/projects/{project_id}", response_model=ScraperProject)
+async def get_project(project_id: str):
+    """Get a specific project"""
+    project = await db.scraper_projects.find_one({"id": project_id}, {"_id": 0})
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if isinstance(project.get('created_at'), str):
+        project['created_at'] = datetime.fromisoformat(project['created_at'])
+    if project.get('last_run') and isinstance(project['last_run'], str):
+        project['last_run'] = datetime.fromisoformat(project['last_run'])
+    
+    return project
+
+@api_router.put("/projects/{project_id}", response_model=ScraperProject)
+async def update_project(project_id: str, project: ScraperProjectCreate):
+    """Update a project"""
+    existing = await db.scraper_projects.find_one({"id": project_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    update_data = project.model_dump()
+    await db.scraper_projects.update_one(
+        {"id": project_id},
+        {"$set": update_data}
+    )
+    
+    updated = await get_project(project_id)
+    return updated
+
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project"""
+    result = await db.scraper_projects.delete_one({"id": project_id})
     
     if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Data not found")
+        raise HTTPException(status_code=404, detail="Project not found")
     
-    return {"message": "Data deleted successfully"}
+    # Also delete associated results
+    await db.scraped_results.delete_many({"project_id": project_id})
+    
+    return {"message": "Project deleted successfully"}
 
-@api_router.delete("/scrape/data")
-async def clear_all_scraped_data():
-    """Clear all scraped data"""
-    result = await db.scraped_data.delete_many({})
-    return {"message": f"Deleted {result.deleted_count} entries"}
+# Run Project
+@api_router.post("/projects/{project_id}/run")
+async def run_project(project_id: str, background_tasks: BackgroundTasks):
+    """Run a scraping project"""
+    project = await db.scraper_projects.find_one({"id": project_id}, {"_id": 0})
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Scrape the URL
+    result = scraper.scrape_url(project['target_url'], project.get('selectors', []))
+    
+    # Save result
+    scraped_result = ScrapedResult(
+        project_id=project_id,
+        url=result['url'],
+        title=result.get('title', ''),
+        data=result.get('data', {}),
+        status='success' if 'error' not in result else 'failed',
+        error=result.get('error')
+    )
+    
+    doc = scraped_result.model_dump()
+    doc['scraped_at'] = doc['scraped_at'].isoformat()
+    await db.scraped_results.insert_one(doc)
+    
+    # Update project
+    await db.scraper_projects.update_one(
+        {"id": project_id},
+        {
+            "$set": {
+                "last_run": datetime.now(timezone.utc).isoformat()
+            },
+            "$inc": {"run_count": 1}
+        }
+    )
+    
+    return scraped_result
 
-# Configuration Endpoints
-@api_router.post("/scrape/config", response_model=ScraperConfig)
-async def save_scraper_config(input: ScraperConfigCreate):
-    """Save scraper configuration"""
-    # Delete existing config (we only keep one)
-    await db.scraper_config.delete_many({})
+# Results
+@api_router.get("/projects/{project_id}/results")
+async def get_project_results(project_id: str, limit: int = 50):
+    """Get results for a project"""
+    results = await db.scraped_results.find(
+        {"project_id": project_id},
+        {"_id": 0}
+    ).sort("scraped_at", -1).limit(limit).to_list(limit)
     
-    config_obj = ScraperConfig(**input.model_dump())
-    doc = config_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
+    for result in results:
+        if isinstance(result.get('scraped_at'), str):
+            result['scraped_at'] = datetime.fromisoformat(result['scraped_at'])
     
-    await db.scraper_config.insert_one(doc)
-    return config_obj
+    return results
 
-@api_router.get("/scrape/config", response_model=Optional[ScraperConfig])
-async def get_scraper_config():
-    """Get current scraper configuration"""
-    config = await db.scraper_config.find_one({}, {"_id": 0})
+@api_router.get("/results", response_model=List[ScrapedResult])
+async def get_all_results(limit: int = 100):
+    """Get all scraped results"""
+    results = await db.scraped_results.find({}, {"_id": 0}).sort("scraped_at", -1).limit(limit).to_list(limit)
     
-    if config:
-        if isinstance(config['timestamp'], str):
-            config['timestamp'] = datetime.fromisoformat(config['timestamp'])
-        return config
+    for result in results:
+        if isinstance(result.get('scraped_at'), str):
+            result['scraped_at'] = datetime.fromisoformat(result['scraped_at'])
     
-    return None
+    return results
 
-# Statistics Endpoint
-@api_router.get("/scrape/stats")
-async def get_scraper_stats():
-    """Get scraping statistics"""
-    total_scraped = await db.scraped_data.count_documents({})
-    
-    # Get top domains
-    pipeline = [
-        {"$group": {"_id": "$domain", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 10}
+# Templates
+@api_router.get("/templates", response_model=List[ScrapeTemplate])
+async def get_templates():
+    """Get scraping templates"""
+    templates = [
+        {
+            "id": "ecommerce",
+            "name": "E-commerce Product",
+            "category": "Shopping",
+            "description": "Extract product details, prices, and reviews",
+            "icon": "ShoppingCart",
+            "selectors": [
+                {"name": "title", "selector": "h1.product-title, .product-name", "type": "text"},
+                {"name": "price", "selector": ".price, [data-price]", "type": "text"},
+                {"name": "description", "selector": ".description, .product-description", "type": "text"},
+                {"name": "images", "selector": ".product-image img", "type": "attribute", "attribute": "src"}
+            ],
+            "sample_url": "https://example.com/product"
+        },
+        {
+            "id": "news",
+            "name": "News Article",
+            "category": "Media",
+            "description": "Extract article title, content, author, and date",
+            "icon": "Newspaper",
+            "selectors": [
+                {"name": "headline", "selector": "h1.headline, article h1", "type": "text"},
+                {"name": "author", "selector": ".author, .byline", "type": "text"},
+                {"name": "date", "selector": "time, .publish-date", "type": "text"},
+                {"name": "content", "selector": "article p, .article-body p", "type": "text"}
+            ],
+            "sample_url": "https://example.com/article"
+        },
+        {
+            "id": "directory",
+            "name": "Business Directory",
+            "category": "Directory",
+            "description": "Extract business listings with contact info",
+            "icon": "Building2",
+            "selectors": [
+                {"name": "name", "selector": ".business-name, h3", "type": "text"},
+                {"name": "phone", "selector": ".phone, a[href^='tel:']", "type": "text"},
+                {"name": "address", "selector": ".address, .location", "type": "text"},
+                {"name": "website", "selector": "a.website", "type": "attribute", "attribute": "href"}
+            ],
+            "sample_url": "https://example.com/directory"
+        },
+        {
+            "id": "job",
+            "name": "Job Listing",
+            "category": "Careers",
+            "description": "Extract job postings with requirements",
+            "icon": "Briefcase",
+            "selectors": [
+                {"name": "title", "selector": ".job-title, h1", "type": "text"},
+                {"name": "company", "selector": ".company-name", "type": "text"},
+                {"name": "location", "selector": ".location, .job-location", "type": "text"},
+                {"name": "salary", "selector": ".salary, .compensation", "type": "text"},
+                {"name": "description", "selector": ".job-description", "type": "text"}
+            ],
+            "sample_url": "https://example.com/jobs"
+        },
+        {
+            "id": "social",
+            "name": "Social Media Post",
+            "category": "Social",
+            "description": "Extract posts, comments, and engagement",
+            "icon": "Share2",
+            "selectors": [
+                {"name": "content", "selector": ".post-content, .status", "type": "text"},
+                {"name": "author", "selector": ".author, .username", "type": "text"},
+                {"name": "timestamp", "selector": "time, .timestamp", "type": "text"},
+                {"name": "likes", "selector": ".like-count, .engagement", "type": "text"}
+            ],
+            "sample_url": "https://example.com/post"
+        },
+        {
+            "id": "realestate",
+            "name": "Real Estate",
+            "category": "Property",
+            "description": "Extract property listings with details",
+            "icon": "Home",
+            "selectors": [
+                {"name": "address", "selector": ".property-address, h1", "type": "text"},
+                {"name": "price", "selector": ".price, .listing-price", "type": "text"},
+                {"name": "bedrooms", "selector": ".beds, .bedrooms", "type": "text"},
+                {"name": "bathrooms", "selector": ".baths, .bathrooms", "type": "text"},
+                {"name": "sqft", "selector": ".sqft, .square-feet", "type": "text"}
+            ],
+            "sample_url": "https://example.com/property"
+        }
     ]
-    top_domains = await db.scraped_data.aggregate(pipeline).to_list(10)
+    return templates
+
+# Stats
+@api_router.get("/stats")
+async def get_stats():
+    """Get platform statistics"""
+    total_projects = await db.scraper_projects.count_documents({})
+    active_projects = await db.scraper_projects.count_documents({"active": True})
+    total_results = await db.scraped_results.count_documents({})
+    
+    # Recent activity
+    recent_results = await db.scraped_results.find(
+        {},
+        {"_id": 0, "project_id": 1, "scraped_at": 1}
+    ).sort("scraped_at", -1).limit(10).to_list(10)
     
     return {
-        "total_scraped_pages": total_scraped,
-        "top_domains": [{"domain": item["_id"], "count": item["count"]} for item in top_domains]
+        "total_projects": total_projects,
+        "active_projects": active_projects,
+        "total_results": total_results,
+        "recent_activity": recent_results
     }
 
-
-# Include the router in the main app
 app.include_router(api_router)
 
 app.add_middleware(
@@ -181,7 +431,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
