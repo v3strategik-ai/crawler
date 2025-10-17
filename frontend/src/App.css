@@ -439,3 +439,67 @@ body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Keywords Section */
+.keywords-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.keywords-toggle {
+  margin-bottom: 12px;
+}
+
+.keywords-panel {
+  background: var(--surface-light);
+  padding: 20px;
+  border-radius: 12px;
+  border: 2px solid var(--primary);
+  margin-top: 12px;
+}
+
+.keyword-input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.keyword-input {
+  flex: 1;
+}
+
+.keywords-display {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.keyword-badge {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.keyword-badge button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  color: inherit;
+}
+
+.keywords-form-group {
+  background: var(--surface-light);
+  padding: 16px;
+  border-radius: 8px;
+  border: 2px solid var(--primary);
+}
+
+.project-keywords {
+  padding: 8px 0;
+}
