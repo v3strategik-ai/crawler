@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Scraper Pro - Configuration</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      text-align: center;
+      color: white;
+      margin-bottom: 32px;
+    }
+    
+    .header h1 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .header p {
+      font-size: 16px;
+      opacity: 0.9;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    
+    .card h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    
+    .form-group {
+      margin-bottom: 24px;
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 8px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .form-textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+    
+    .selector-list {
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .selector-item {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr auto;
+      gap: 12px;
+      padding: 12px;
+      background: #f9fafb;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    
+    .selector-input {
+      padding: 8px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #374151;
+    }
+    
+    .btn-secondary:hover {
+      background: #e5e7eb;
+    }
+    
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+    
+    .btn-danger {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .btn-success {
+      background: #10b981;
+      color: white;
+    }
+    
+    .actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 24px;
+    }
+    
+    .help-text {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    
+    .status-message {
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 16px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .status-message.success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    
+    .status-message.error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🕷️ Web Scraper Pro</h1>
+      <p>Configure your advanced web scraping settings</p>
+    </div>
+    
+    <div class="card">
+      <h2>🎯 Keywords</h2>
+      <div class="form-group">
+        <label class="form-label">Search Keywords (one per line)</label>
+        <textarea class="form-input form-textarea" id="keywords" placeholder="Enter keywords to search for...
+Example:
+product
+price
+email"></textarea>
+        <div class="help-text">Only pages containing these keywords will be saved</div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h2>🎨 Custom Selectors</h2>
+      <div class="form-group">
+        <label class="form-label">CSS Selectors for Data Extraction</label>
+        <div class="selector-list" id="selectorList"></div>
+        <button class="btn btn-secondary btn-small" id="addSelectorBtn" style="margin-top: 12px;">+ Add Selector</button>
+        <div class="help-text">Define custom CSS selectors to extract specific data from pages</div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h2>🌐 Domain Filters</h2>
+      <div class="form-group">
+        <label class="form-label">Whitelist Domains (one per line)</label>
+        <textarea class="form-input form-textarea" id="whitelist" placeholder="example.com
+google.com"></textarea>
+        <div class="help-text">Only scrape these domains (leave empty to scrape all)</div>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">Blacklist Domains (one per line)</label>
+        <textarea class="form-input form-textarea" id="blacklist" placeholder="ads.example.com
+tracker.com"></textarea>
+        <div class="help-text">Never scrape these domains</div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h2>⚙️ Backend Settings</h2>
+      <div class="form-group">
+        <label class="form-label">Backend API URL</label>
+        <input type="text" class="form-input" id="backendUrl" placeholder="http://localhost:8001/api">
+        <div class="help-text">URL of your FastAPI backend for data storage</div>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" id="saveToBackend" style="margin-right: 8px;">
+          Save to Backend Server
+        </label>
+        <div class="help-text">Store scraped data on backend (requires running server)</div>
+      </div>
+    </div>
+    
+    <div class="actions">
+      <button class="btn btn-secondary" id="resetBtn">Reset to Defaults</button>
+      <button class="btn btn-primary" id="saveBtn">Save Configuration</button>
+    </div>
+    
+    <div id="statusMessage"></div>
+  </div>
+  
+  <script src="options.js"></script>
+</body>
+</html>
