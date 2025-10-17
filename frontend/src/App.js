@@ -15,23 +15,24 @@ import {
   Users, Building2, DollarSign, Mail, Phone, Tag, Sparkles, CheckCircle, 
   Eye, Clock, Link as LinkIcon, Image as ImageIcon, Table as TableIcon, 
   Copy, ArrowRight, Wand2, FileJson, FileSpreadsheet, Trash2, Edit, 
-  Filter, Settings, Save, FolderOpen, Target, Code
+  Filter, Settings, Save, FolderOpen, Target, Code, X
 } from 'lucide-react';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from './components/ui/dialog';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './components/ui/accordion';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
 function App() {
   const [activeTab, setActiveTab] = useState('scraper');
   
-  // Scraping state
+  // Quick Scraping state
   const [scrapeUrl, setScrapeUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [recentScrapes, setRecentScrapes] = useState([]);
+  const [quickKeywords, setQuickKeywords] = useState([]);
+  const [keywordInput, setKeywordInput] = useState('');
+  const [showKeywordPanel, setShowKeywordPanel] = useState(false);
   
   // Projects state
   const [projects, setProjects] = useState([]);
@@ -43,7 +44,7 @@ function App() {
     keywords: [],
     auto_import_to_crm: false
   });
-  const [editingProject, setEditingProject] = useState(null);
+  const [projectKeywordInput, setProjectKeywordInput] = useState('');
   
   // CRM state
   const [contacts, setContacts] = useState([]);
@@ -68,16 +69,10 @@ function App() {
   // Filters
   const [contactFilter, setContactFilter] = useState({ status: 'all', source: 'all', search: '' });
   const [projectFilter, setProjectFilter] = useState({ search: '' });
-  
-  // Stats
   const [stats, setStats] = useState({ scraper: {}, crm: {} });
-  
-  // Keywords for filtering
-  const [keywordInput, setKeywordInput] = useState('');
 
   useEffect(() => {
     loadAllData();
-    loadRecentScrapes();
   }, []);
 
   const loadAllData = async () => {
@@ -101,11 +96,15 @@ function App() {
     }
   };
 
-  const loadRecentScrapes = () => {
-    const saved = localStorage.getItem('recentScrapes');
-    if (saved) {
-      setRecentScrapes(JSON.parse(saved));
+  const addQuickKeyword = () => {
+    if (keywordInput.trim() && !quickKeywords.includes(keywordInput.trim())) {
+      setQuickKeywords([...quickKeywords, keywordInput.trim()]);
+      setKeywordInput('');
     }
+  };
+
+  const removeQuickKeyword = (keyword) => {
+    setQuickKeywords(quickKeywords.filter(k => k !== keyword));
   };
 
   const handleSmartScrape = async () => {
@@ -125,23 +124,31 @@ function App() {
     try {
       const response = await axios.post(`${API_URL}/api/scrape/quick?url=${encodeURIComponent(scrapeUrl)}`);
       
-      const data = {
+      let data = {
         ...response.data,
         scrapedAt: new Date().toISOString()
       };
       
-      setResult(data);
+      // Filter by keywords if any
+      if (quickKeywords.length > 0) {
+        const pageText = JSON.stringify(data).toLowerCase();
+        const foundKeywords = quickKeywords.filter(kw => pageText.includes(kw.toLowerCase()));
+        
+        if (foundKeywords.length === 0) {
+          toast.warning('No keywords found on this page. Showing results anyway.');
+        } else {
+          toast.success(`Found ${foundKeywords.length} keyword${foundKeywords.length > 1 ? 's' : ''}: ${foundKeywords.join(', ')}`);
+        }
+        
+        data.foundKeywords = foundKeywords;
+      }
       
-      const recent = [data, ...recentScrapes.slice(0, 9)];
-      setRecentScrapes(recent);
-      localStorage.setItem('recentScrapes', JSON.stringify(recent));
+      setResult(data);
 
       if (data.extracted_contacts?.length > 0) {
         toast.success(`Found ${data.extracted_contacts.length} contact${data.extracted_contacts.length > 1 ? 's' : ''}!`, {
           action: { label: 'Save to CRM', onClick: () => saveContactsToCRM(data.extracted_contacts) }
         });
-      } else {
-        toast.success('Page scraped successfully!');
       }
     } catch (error) {
       toast.error('Failed to scrape page');
@@ -190,6 +197,23 @@ function App() {
   };
 
   // Project Management
+  const addProjectKeyword = () => {
+    if (projectKeywordInput.trim() && !newProject.keywords.includes(projectKeywordInput.trim())) {
+      setNewProject({
+        ...newProject,
+        keywords: [...newProject.keywords, projectKeywordInput.trim()]
+      });
+      setProjectKeywordInput('');
+    }
+  };
+
+  const removeProjectKeyword = (keyword) => {
+    setNewProject({
+      ...newProject,
+      keywords: newProject.keywords.filter(k => k !== keyword)
+    });
+  };
+
   const createProject = async () => {
     if (!newProject.name || !newProject.target_urls[0]) {
       toast.error('Name and at least one URL required');
@@ -331,31 +355,6 @@ function App() {
     return [headers.join(','), ...rows.map(row => row.map(cell => `"${cell}"`).join(','))].join('\n');
   };
 
-  const addKeyword = () => {
-    if (keywordInput.trim()) {
-      setNewProject({
-        ...newProject,
-        keywords: [...newProject.keywords, keywordInput.trim()]
-      });
-      setKeywordInput('');
-    }
-  };
-
-  const removeKeyword = (keyword) => {
-    setNewProject({
-      ...newProject,
-      keywords: newProject.keywords.filter(k => k !== keyword)
-    });
-  };
-
-  const addTag = (setter, current, tagInput) => {
-    if (tagInput.trim()) {
-      setter({ ...current, tags: [...current.tags, tagInput.trim()] });
-      return '';
-    }
-    return tagInput;
-  };
-
   const filteredContacts = contacts.filter(c => {
     if (contactFilter.status !== 'all' && c.status !== contactFilter.status) return false;
     if (contactFilter.source !== 'all' && c.source !== contactFilter.source) return false;
@@ -430,6 +429,51 @@ function App() {
                     {loading ? <><Clock className="animate-spin w-5 h-5 mr-2" />Scraping...</> : <><Wand2 className="w-5 h-5 mr-2" />Scrape Now</>}
                   </Button>
                 </div>
+
+                {/* KEYWORDS PANEL */}
+                <div className="keywords-section">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setShowKeywordPanel(!showKeywordPanel)}
+                    className="keywords-toggle"
+                  >
+                    <Tag className="w-4 h-4 mr-2" />
+                    Keywords Filter {quickKeywords.length > 0 && `(${quickKeywords.length})`}
+                  </Button>
+
+                  {showKeywordPanel && (
+                    <div className="keywords-panel">
+                      <Label className="text-sm font-medium">Filter results by keywords (optional)</Label>
+                      <p className="text-xs text-muted-foreground mb-3">Only show results containing these keywords</p>
+                      <div className="keyword-input-row">
+                        <Input
+                          placeholder="Add keyword (e.g., email, contact, price)..."
+                          value={keywordInput}
+                          onChange={(e) => setKeywordInput(e.target.value)}
+                          onKeyPress={(e) => e.key === 'Enter' && (addQuickKeyword(), e.preventDefault())}
+                          className="keyword-input"
+                        />
+                        <Button onClick={addQuickKeyword} size="sm">
+                          <Plus className="w-4 h-4 mr-2" />Add
+                        </Button>
+                      </div>
+                      {quickKeywords.length > 0 && (
+                        <div className="keywords-display">
+                          {quickKeywords.map(kw => (
+                            <Badge key={kw} variant="secondary" className="keyword-badge">
+                              <Tag className="w-3 h-3 mr-1" />
+                              {kw}
+                              <button onClick={() => removeQuickKeyword(kw)} className="ml-2 hover:text-destructive">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
@@ -440,10 +484,18 @@ function App() {
                     <div>
                       <CardTitle>{result.title}</CardTitle>
                       <a href={result.url} target="_blank" rel="noopener noreferrer" className="result-url">{result.url}</a>
+                      {result.foundKeywords?.length > 0 && (
+                        <div className="mt-2">
+                          <span className="text-sm text-muted-foreground">Keywords found: </span>
+                          {result.foundKeywords.map(kw => (
+                            <Badge key={kw} variant="default" className="ml-1">{kw}</Badge>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="result-actions">
                       <Button variant="outline" size="sm" onClick={() => { const d = JSON.stringify(result, null, 2); const b = new Blob([d], {type: 'application/json'}); const u = URL.createObjectURL(b); const l = document.createElement('a'); l.href = u; l.download = `scraped_${Date.now()}.json`; l.click(); toast.success('Exported!'); }}>
-                        <FileJson className="w-4 h-4 mr-2" />JSON
+                        <FileJson className="w-4 h-4 mr-2" />Export
                       </Button>
                     </div>
                   </div>
@@ -497,7 +549,7 @@ function App() {
             <div className="panel-header">
               <div>
                 <h2>Scraping Projects</h2>
-                <p className="text-muted-foreground">Organize and automate your scraping tasks</p>
+                <p className="text-muted-foreground">Organize scraping with keywords and automation</p>
               </div>
               <Button onClick={() => setShowNewProjectDialog(true)}><Plus className="w-4 h-4 mr-2" />New Project</Button>
             </div>
@@ -519,8 +571,18 @@ function App() {
                     </div>
                   </CardHeader>
                   <CardContent>
+                    {project.keywords?.length > 0 && (
+                      <div className="project-keywords mb-3">
+                        <span className="text-xs text-muted-foreground">Keywords: </span>
+                        {project.keywords.map(kw => (
+                          <Badge key={kw} variant="outline" className="text-xs ml-1">
+                            <Tag className="w-3 h-3 mr-1" />{kw}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                     <div className="project-meta">
-                      <Badge variant="outline"><CheckCircle className="w-3 h-3 mr-1" />{project.success_count} success</Badge>
+                      <Badge variant="outline"><CheckCircle className="w-3 h-3 mr-1" />{project.success_count}</Badge>
                       <Badge variant="outline">Runs: {project.run_count}</Badge>
                       {project.auto_import_to_crm && <Badge variant="secondary"><Users className="w-3 h-3 mr-1" />Auto-CRM</Badge>}
                     </div>
@@ -534,7 +596,7 @@ function App() {
             </div>
           </TabsContent>
 
-          {/* CONTACTS TAB - CRM */}
+          {/* CONTACTS TAB */}
           <TabsContent value="contacts" className="tab-panel">
             <div className="panel-header">
               <div>
@@ -590,7 +652,7 @@ function App() {
                     </div>
                     {contact.tags?.length > 0 && (
                       <div className="tags-row">
-                        {contact.tags.map(tag => <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>)}
+                        {contact.tags.map(tag => <Badge key={tag} variant="secondary" className="text-xs"><Tag className="w-3 h-3 mr-1" />{tag}</Badge>)}
                       </div>
                     )}
                     <div className="card-actions">
@@ -652,7 +714,7 @@ function App() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Create New Project</DialogTitle>
-            <DialogDescription>Organize your scraping with projects and keywords</DialogDescription>
+            <DialogDescription>Organize scraping with keywords for targeted extraction</DialogDescription>
           </DialogHeader>
           <div className="dialog-form">
             <div className="form-group">
@@ -673,20 +735,34 @@ function App() {
               ))}
               <Button variant="outline" size="sm" onClick={() => setNewProject({ ...newProject, target_urls: [...newProject.target_urls, ''] })}><Plus className="w-4 h-4 mr-2" />Add URL</Button>
             </div>
-            <div className="form-group">
-              <Label>Keywords (Optional)</Label>
+            <div className="form-group keywords-form-group">
+              <Label className="flex items-center gap-2">
+                <Tag className="w-4 h-4" />
+                Keywords (Highly Recommended)
+              </Label>
+              <p className="text-xs text-muted-foreground mb-2">Only save pages containing these keywords - perfect for targeted lead generation</p>
               <div className="flex gap-2 mb-2">
-                <Input value={keywordInput} onChange={(e) => setKeywordInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (addKeyword(), e.preventDefault())} placeholder="Add keyword..." />
-                <Button onClick={addKeyword}><Plus className="w-4 h-4" /></Button>
+                <Input 
+                  value={projectKeywordInput} 
+                  onChange={(e) => setProjectKeywordInput(e.target.value)} 
+                  onKeyPress={(e) => e.key === 'Enter' && (addProjectKeyword(), e.preventDefault())} 
+                  placeholder="e.g., email, contact, CEO, phone"
+                />
+                <Button onClick={addProjectKeyword}><Plus className="w-4 h-4" /></Button>
               </div>
-              <div className="tags-display">
-                {newProject.keywords.map(kw => (
-                  <Badge key={kw} variant="secondary">
-                    {kw}
-                    <button onClick={() => removeKeyword(kw)} className="ml-2 hover:text-destructive">×</button>
-                  </Badge>
-                ))}
-              </div>
+              {newProject.keywords.length > 0 && (
+                <div className="keywords-display">
+                  {newProject.keywords.map(kw => (
+                    <Badge key={kw} variant="secondary" className="keyword-badge">
+                      <Tag className="w-3 h-3 mr-1" />
+                      {kw}
+                      <button onClick={() => removeProjectKeyword(kw)} className="ml-2 hover:text-destructive">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="form-group">
               <div className="flex items-center space-x-2">
